@@ -93,12 +93,13 @@ def test_layers(layers):
 
 @test_safe
 def test_optimize(optimize):
+    l2_const = 0.01
     num_classes = 2
     shape = [2, 3, 4, num_classes]
     layers_output = tf.Variable(tf.zeros(shape))
     correct_label = tf.placeholder(tf.float32, [None, None, None, num_classes])
     learning_rate = tf.placeholder(tf.float32)
-    logits, train_op, cross_entropy_loss = optimize(layers_output, correct_label, learning_rate, num_classes)
+    logits, train_op, cross_entropy_loss = optimize(layers_output, correct_label, learning_rate, num_classes, l2_const)
 
     _assert_tensor_shape(logits, [2*3*4, num_classes], 'Logits')
 

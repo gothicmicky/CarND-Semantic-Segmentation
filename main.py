@@ -57,42 +57,48 @@ def layers(vgg_layer3_out, vgg_layer4_out, vgg_layer7_out, num_classes):
     :return: The Tensor for the last layer of output
     """
     # TODO: Implement function
-    # 1x1 convolution of vgg encoder last layer
-    conv_1x1 = tf.layers.conv2d(vgg_layer7_out, num_classes, 1, padding='same',
-                                kernel_regularizer=tf.contrib.layers.l2_regularizer(1e-3))
 
-    # Scaling up by 2 of conv_1x1 (deconvolution)
-    deconv_1 = tf.layers.conv2d_transpose(conv_1x1, num_classes, 4, 2, padding='same',
-                                          kernel_regularizer=tf.contrib.layers.l2_regularizer(1e-3))
-    # 1x1 convolution of vgg encoder layer 4 output
-    vgg_layer4_conv_1x1 = tf.layers.conv2d(vgg_layer4_out, num_classes, 1, padding='same',
-                                           kernel_regularizer=tf.contrib.layers.l2_regularizer(1e-3))
-    # combine the two
-    combine_1 = tf.add(deconv_1, vgg_layer4_conv_1x1)
+    initializer = tf.truncated_normal_initializer(stddev = 1E-2)
+    regularizer = tf.contrib.layers.l2_regularizer(1E-3)
 
-    # Scaling up by 2 of combine_1
-    deconv_2 = tf.layers.conv2d_transpose(combine_1, num_classes, 4, 2, padding='same',
-                                          kernel_regularizer=tf.contrib.layers.l2_regularizer(1e-3))
-    # 1x1 convolution of vgg encoder layer 3 output
-    vgg_layer3_conv_1x1 = tf.layers.conv2d(vgg_layer3_out, num_classes, 1, padding='same',
-                                           kernel_regularizer=tf.contrib.layers.l2_regularizer(1e-3))
+    # 1x1 convolution of vgg encoder layer3, 4, 7
+    vgg_layer3_out = tf.layers.conv2d(vgg_layer3_out, num_classes, 1, padding='same',
+                                   kernel_initializer=initializer, kernel_regularizer=regularizer)
+    vgg_layer4_out = tf.layers.conv2d(vgg_layer4_out, num_classes, 1, padding='same',
+                                   kernel_initializer=initializer, kernel_regularizer=regularizer)
+    vgg_layer7_out = tf.layers.conv2d(vgg_layer7_out, num_classes, 1, padding='same',
+                                   kernel_initializer=initializer, kernel_regularizer=regularizer)
 
-    # combine the two
-    combine_2 = tf.add(deconv_2, vgg_layer3_conv_1x1)
+
+    # Upsample the last layer (layer 7) and add the skip connection with pool4
+    inputs = tf.layers.conv2d_transpose(vgg_layer7_out, num_classes, 4, strides=(2, 2),
+                                padding='same', kernel_initializer=initializer,
+                                kernel_regularizer=regularizer)
+    inputs = tf.add(inputs, vgg_layer4_out)
+
+    # Repeat step above but with pool3
+    inputs = tf.layers.conv2d_transpose(inputs, num_classes, 4, strides=(2, 2),
+                                padding='same', kernel_initializer=initializer,
+                                kernel_regularizer=regularizer)
+    inputs = tf.add(inputs, vgg_layer3_out)
+
+    # Upsample one more time to get back to the original image size
+    inputs = tf.layers.conv2d_transpose(inputs, num_classes, 16, strides=(8, 8),
+                                padding='same', kernel_initializer=initializer,
+                                kernel_regularizer=regularizer)
 
     with tf.name_scope('encode_final_layers'):
-        output = tf.layers.conv2d_transpose(combine_2, num_classes, 16, 8, padding='same',
-                                         kernel_regularizer=tf.contrib.layers.l2_regularizer(1e-3))
         # print the shape
-        tf.Print(output, [tf.shape(output)])
+        tf.Print(inputs, [tf.shape(inputs)])
 
-        tf.summary.histogram('encode_final_upsample', output)
+        tf.summary.histogram('encode_final_upsample', inputs)
 
-    return output
+    return inputs
+
 tests.test_layers(layers)
 
 
-def optimize(nn_last_layer, correct_label, learning_rate, num_classes):
+def optimize(nn_last_layer, correct_label, learning_rate, num_classes, l2_const):
     """
     Build the TensorFLow loss and optimizer operations.
     :param nn_last_layer: TF Tensor of the last layer in the neural network
@@ -112,7 +118,12 @@ def optimize(nn_last_layer, correct_label, learning_rate, num_classes):
     cross_entropy_loss = tf.reduce_mean(cross_entropy)
 
     # AdamOpt train operator
-    train_op = tf.train.AdamOptimizer(learning_rate).minimize(cross_entropy_loss)
+    optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
+
+    reg_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
+    cross_entropy_loss = cross_entropy_loss + l2_const * sum(reg_losses)
+
+    train_op = optimizer.minimize(loss=cross_entropy_loss)
 
     return logits, train_op, cross_entropy_loss
 tests.test_optimize(optimize)
@@ -122,6 +133,7 @@ EPOCHS = 30
 BATCH_SIZE = 5
 LEARNING_RATE = 0.0001
 DROPOUT = 0.50
+l2_const = 0.01
 
 # Placeholders
 #  4D = [batch, img_h, img_w, num_classes]
@@ -190,7 +202,7 @@ def run():
         # TODO: Build NN using load_vgg, layers, and optimize function
         image_input, keep_prob, layer3_out, layer4_out, layer7_out = load_vgg(sess, vgg_path)
         fcn_out = layers(layer3_out, layer4_out, layer7_out, num_classes=2)
-        logits, train_op, cross_entropy_loss = optimize(fcn_out, correct_label, learning_rate, num_classes)
+        logits, train_op, cross_entropy_loss = optimize(fcn_out, correct_label, learning_rate, num_classes, l2_const)
 
         # TODO: Train NN using the train_nn function
         # Initialize all variables
